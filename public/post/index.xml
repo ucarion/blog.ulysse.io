@@ -1,15 +1,14 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Ulysse&#39;s Blog</title>
-    <link>http://blog.ulysse.io/</link>
-    <description>Recent content on Ulysse&#39;s Blog</description>
+    <title>Posts on Ulysse&#39;s Blog</title>
+    <link>http://blog.ulysse.io/post/</link>
+    <description>Recent content in Posts on Ulysse&#39;s Blog</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>en-us</language>
     <lastBuildDate>Fri, 20 Apr 2018 11:44:12 -0700</lastBuildDate>
     
-        <atom:link href="http://blog.ulysse.io/index.xml" rel="self" type="application/rss+xml" />
-    
+	<atom:link href="http://blog.ulysse.io/post/index.xml" rel="self" type="application/rss+xml" />
     
     
     <item>
@@ -22,7 +21,6 @@
 If you&amp;rsquo;re in a hurry, skip to the end to just get a module you can copy-and-paste.
 Terraform is a tool that lets you declaratively describe the state of your infrastructure. Probably the best feature about it is that your infra&amp;rsquo;s state is in version control, instead of ad-hoc scripts and here-be-dragons resources that somebody made by clicking around in the AWS UI.</description>
     </item>
-    
     
   </channel>
 </rss>

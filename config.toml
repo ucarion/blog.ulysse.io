@@ -1,6 +1,6 @@
-baseurl = "https://example.org/"
+baseurl = "http://blog.ulysse.io/"
 languageCode = "en-us"
-title = "Natrium Theme"
+title = "Ulysse's Blog"
 theme = "hugo-natrium-theme"
 preserveTaxonomyNames = true
 rssLimit = 10

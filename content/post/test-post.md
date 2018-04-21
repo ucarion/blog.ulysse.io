@@ -1,7 +1,6 @@
 ---
 title: "Quick Tutorial: Setting up ECS with Terraform"
 date: 2018-04-20T11:44:12-07:00
-draft: true
 ---
 
 This document describes, for the AWS ECS noob, how to set up an AWS ECS cluster

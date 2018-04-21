@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="generator" content="Hugo 0.39" />
+
+
+<title>Quick Tutorial: Setting up ECS with Terraform - Ulysse&#39;s Blog</title>
+<meta property="og:title" content="Quick Tutorial: Setting up ECS with Terraform - Ulysse&#39;s Blog">
+
+
+
+  
+
+
+
+
+
+
+<link rel="stylesheet" href="http://blog.ulysse.io/css/main.css" media="all">
+<link rel="stylesheet" href="http://blog.ulysse.io/css/fonts.css">
+
+  </head>
+  <body>
+    <div class="wrapper">
+      <header class="header">
+        <nav class="nav">
+  <a href="http://blog.ulysse.io/" class="nav-logo">
+    <img src="http://blog.ulysse.io/images/logo.png" 
+         width="50" 
+         height="50" 
+         alt="Logo">
+  </a>
+
+  <ul class="nav-links">
+    
+    <li><a href="https://github.com/ucarion">GitHub</a></li>
+    
+  </ul>
+</nav>
+
+      </header>
+
+
+<main class="content" role="main">
+  <article class="article">
+    <h1 class="article-title">Quick Tutorial: Setting up ECS with Terraform</h1>
+    
+    <span class="article-date">2018-04-20</span>
+    
+
+    <div class="article-content">
+      
+
+<p>This document describes, for the AWS ECS noob, how to set up an AWS ECS cluster
+from scratch, entirely using Terraform.</p>
+
+<p><em>If you&rsquo;re in a hurry, <a href="#copy-pasteable-code">skip to the end</a> to just get a
+module you can copy-and-paste.</em></p>
+
+<p><a href="https://www.terraform.io/">Terraform</a> is a tool that lets you declaratively describe the state
+of your infrastructure. Probably the best feature about it is that your infra&rsquo;s
+state is in version control, instead of ad-hoc scripts and here-be-dragons
+resources that somebody made by clicking around in the AWS UI.</p>
+
+<p>The big downside, however, is that a lot of things in AWS aren&rsquo;t obvious to set
+up with Terraform. This document is a tutorial for one of the tougher things to
+figure out: starting a new <a href="https://aws.amazon.com/ecs/">AWS Elastic Container Service (&ldquo;ECS&rdquo;)</a>
+cluster, ready to start running services and tasks.</p>
+
+<p>I&rsquo;ll assume you have already set up a working <a href="https://www.terraform.io/docs/providers/aws/">AWS provider</a> for
+Terraform, and that you know how to issue <code>terraform</code> commands. I will <em>not</em>
+assume that you know exactly how ECS works. There will be helpful diagrams.
+There will be many AWS-related acronyms, and I usually won&rsquo;t presume you know
+what they mean.</p>
+
+<h1 id="creating-the-cluster">Creating the cluster</h1>
+
+<p>Throughout this demo, we&rsquo;re going to create a cluster called &ldquo;megapool&rdquo;.</p>
+
+<p>Actually creating the cluster is actually pretty easy:</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-tf" data-lang="tf"><span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_ecs_cluster&quot; &quot;megapool&quot;</span> {
+<span style="color: #bbbbbb">  name</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;megapool&quot;</span>
+}
+</code></pre></div>
+
+<p>Boom! The cluster is already there:</p>
+
+<p><img src="/cluster-screenshot-1.png" alt="Our megapool cluster, still empty" /></p>
+
+<h1 id="adding-instances-to-the-cluster">Adding instances to the cluster</h1>
+
+<p>There isn&rsquo;t much to this cluster yet. You could already at this point add ECS
+tasks or services to this cluster, but you can&rsquo;t actually <em>run</em> anything in
+this cluster yet. That&rsquo;s because you need to add EC2 instances to this cluster
+(notice the &ldquo;0 Container Instances&rdquo; in the bottom-right of the screenshot
+above).</p>
+
+<p>Unfortunately, Amazon hasn&rsquo;t made this process of adding EC2 instances super
+obvious for noobs. At this point, there will be a number of steps which we
+can&rsquo;t really validate until they all come together:</p>
+
+<ol>
+<li>Add an <a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/AutoScalingGroup.html">Auto-Scaling Group (&ldquo;ASG&rdquo;)</a> for <code>megapool</code>.</li>
+<li>Add a Launch Configuration (a sort of template telling AWS how to initialize
+machines) to that ASG.</li>
+<li>Have that Launch Configuration use an <a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html">Amazon Machine Image (&ldquo;AMI&rdquo;)</a>, a
+sort of virtual machine image, which will contain the <a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ECS_agent.html">ECS
+agent</a>.  The ECS Agent is responsible for talking to AWS&rsquo;s internal
+ECS APIs, and will register the EC2 instance to become a worker for <code>megapool</code>.</li>
+<li>The ECS Agent needs a few permissions that aren&rsquo;t automatically given. So
+we&rsquo;ll need to add a few <a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-network-security.html">Security Group</a> rules and some
+<a href="https://aws.amazon.com/iam/">Identity and Access Management (&ldquo;IAM&rdquo;)</a> roles to grant those permissions.</li>
+<li>Since it&rsquo;s the recommended ways to do things, we&rsquo;re also going to create a
+<a href="https://aws.amazon.com/vpc/">Virtual Private Cloud (&ldquo;VPC&rdquo;)</a> to put all of these resources in.</li>
+</ol>
+
+<p>That&rsquo;s a lot of stuff! Here&rsquo;s a picture of what needs to happen:</p>
+
+<p><img src="/ecs-diagram.png" alt="A diagram of the parts involved in an AWS ECS cluster" /></p>
+
+<h2 id="adding-the-asg">Adding the ASG</h2>
+
+<p>Let&rsquo;s first add an ASG which will contain all of the EC2 instances in our cluster.</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-terraform" data-lang="terraform"><span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_autoscaling_group&quot; &quot;megapool&quot;</span> {
+<span style="color: #bbbbbb">  name</span>                 <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;megapool&quot;</span>
+<span style="color: #bbbbbb">  vpc_zone_identifier</span>  <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;${module.vpc.private_subnets}&quot;</span><span style="color: #d0d0d0">]</span>
+<span style="color: #bbbbbb">  launch_configuration</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${aws_launch_configration.megapool.name}&quot;</span>
+
+<span style="color: #bbbbbb">  desired_capacity</span> <span style="color: #d0d0d0">=</span> <span style="color: #3677a9">3</span>
+<span style="color: #bbbbbb">  min_size</span>         <span style="color: #d0d0d0">=</span> <span style="color: #3677a9">3</span>
+<span style="color: #bbbbbb">  max_size</span>         <span style="color: #d0d0d0">=</span> <span style="color: #3677a9">3</span>
+}
+</code></pre></div>
+
+<p>Though this won&rsquo;t &ldquo;compile&rdquo; yet, we&rsquo;ve already here defined a group of three
+EC2 instances that will form the pool of machines running tasks in our cluster.</p>
+
+<p>The auto-scaling group just defined is referencing two things we haven&rsquo;t
+defined yet: a VPC and a launch configuration. Let&rsquo;s add those next.</p>
+
+<h2 id="adding-the-vpc">Adding the VPC</h2>
+
+<p>Adding a VPC properly is pretty annoying. So instead, let&rsquo;s just use <a href="https://github.com/terraform-aws-modules/terraform-aws-vpc">a
+pre-defined one from the community</a>:</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-terraform" data-lang="terraform"><span style="color: #6ab825; font-weight: bold">module</span> <span style="color: #ed9d13">&quot;vpc&quot;</span> {
+<span style="color: #bbbbbb">  source</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;terraform-aws-modules/vpc/aws&quot;</span>
+
+<span style="color: #bbbbbb">  name</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;vpc&quot;</span>
+<span style="color: #bbbbbb">  cidr</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;10.0.0.0/16&quot;</span>
+
+<span style="color: #bbbbbb">  azs</span>             <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;us-east-1a&quot;, &quot;us-east-1b&quot;, &quot;us-east-1c&quot;</span><span style="color: #d0d0d0">]</span>
+<span style="color: #bbbbbb">  private_subnets</span> <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;10.0.1.0/24&quot;, &quot;10.0.2.0/24&quot;, &quot;10.0.3.0/24&quot;</span><span style="color: #d0d0d0">]</span>
+<span style="color: #bbbbbb">  public_subnets</span>  <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;10.0.101.0/24&quot;, &quot;10.0.102.0/24&quot;, &quot;10.0.103.0/24&quot;</span><span style="color: #d0d0d0">]</span>
+
+<span style="color: #bbbbbb">  enable_nat_gateway</span> <span style="color: #d0d0d0">=</span> <span style="color: #6ab825; font-weight: bold">true</span>
+<span style="color: #bbbbbb">  enable_vpn_gateway</span> <span style="color: #d0d0d0">=</span> <span style="color: #6ab825; font-weight: bold">true</span>
+}
+</code></pre></div>
+
+<p>Looking back up at the ASG we defined above, you can see that we had it use the
+private subnets of the cluster. That&rsquo;s because there&rsquo;s no reason the instances
+in the cluster need to have public IP addresses. If you want to make the
+services the cluster offers publicly addressable, add a load balancer to the
+public subnet, and have it call into the private one.</p>
+
+<h2 id="adding-the-launch-configuration">Adding the Launch Configuration</h2>
+
+<p>The other thing our ASG was missing was a launch configuration. This is where a
+lot of the magic happens. In particular, a launch config is where we tell AWS:</p>
+
+<ol>
+<li>What image (AMI) to run on the instances &ndash; in our case, we&rsquo;ll use the &ldquo;ECS
+Optimized AMI&rdquo;, which AWS maintains and is meant for running the ECS Agent
+(more on that later).</li>
+<li>What permissions the instances should get, which allows us to give the
+instances the permissions ECS Agent requires.</li>
+<li>How to initialize the instance &ndash; in particular, we&rsquo;ll set a configuration
+variable that the ECS Agent reads from to know the name of the cluster it&rsquo;s
+supposed to join.</li>
+</ol>
+
+<p>Here&rsquo;s our launch configuration. A lot of the resources are still to be
+defined:</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-terraform" data-lang="terraform"><span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_launch_configuration&quot; &quot;megapool&quot;</span> {
+<span style="color: #bbbbbb">  name</span>                 <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;megapool&quot;</span>
+<span style="color: #bbbbbb">  image_id</span>             <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${data.aws_ami.ecs_optimized.id}&quot;</span>
+<span style="color: #bbbbbb">  iam_instance_profile</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${aws_iam_instance_profile.ecs_agent.name}&quot;</span>
+<span style="color: #bbbbbb">  security_groups</span>      <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;${aws_security_group.allow_all.id}&quot;</span><span style="color: #d0d0d0">]</span>
+<span style="color: #bbbbbb">  user_data</span>            <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${data.template_file.user_data.rendered}&quot;</span><span style="color: #999999; font-style: italic"></span>
+
+<span style="color: #999999; font-style: italic">  # You probably want to use something beefier. This is just for demo purposes.</span>
+<span style="color: #bbbbbb">  instance_type</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;t2.micro&quot;</span>
+}
+</code></pre></div>
+
+<p>Notice that two of the properties &ndash; <code>image_id</code> and <code>user_data</code> &ndash; are <code>data</code>
+sources, not resources. That&rsquo;s because they don&rsquo;t actually correspond to AWS
+resources, they&rsquo;re just things we&rsquo;ll compute without asking AWS to create
+anything.</p>
+
+<p>We don&rsquo;t need to create the <code>aws_ami</code> because AWS has already made it for us.
+In their docs, AWS has this <a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-optimized_AMI.html">great big table</a> with the image ID you
+should use based on the region you&rsquo;re using.</p>
+
+<p>We could reproduce that big table in Terraform, or we could just search for the
+AMI you want using Terraform&rsquo;s <code>aws_ami</code> data source, since the AMI always has
+the same name in every region:</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-terraform" data-lang="terraform"><span style="color: #a61717; background-color: #e3d2d2">data</span> <span style="color: #ed9d13">&quot;aws_ami&quot; &quot;ecs_optimized&quot;</span> {
+  <span style="color: #a61717; background-color: #e3d2d2">filter</span> {
+<span style="color: #bbbbbb">    name</span>   <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;name&quot;</span>
+<span style="color: #bbbbbb">    values</span> <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;amzn-ami-2017.09.l-amazon-ecs-optimized&quot;</span><span style="color: #d0d0d0">]</span>
+  }
+}
+</code></pre></div>
+
+<p>The launch config user data is basically just a script to run once the machine
+boots up. On initialization, we want to set <code>ECS_CLUSTER=megapool</code> in
+<code>/etc/ecs/ecs.config</code>, which will tell ECS Agent what cluster to join.</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-terraform" data-lang="terraform"><span style="color: #a61717; background-color: #e3d2d2">data</span> <span style="color: #ed9d13">&quot;template_file&quot; &quot;user_data&quot;</span> {
+<span style="color: #bbbbbb">  template</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${file(&quot;${module.path}/user_data.yaml&quot;)}&quot;</span>
+
+  <span style="color: #a61717; background-color: #e3d2d2">vars</span> {
+<span style="color: #bbbbbb">    ecs_cluster</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;megapool&quot;</span>
+  }
+}
+</code></pre></div>
+
+<p>You&rsquo;ll need to add a file called <code>user_data.yaml</code> alongside your <code>.tf</code> file
+with this in it:</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-yaml" data-lang="yaml"><span style="color: #999999; font-style: italic">#cloud-config</span>
+<span style="color: #d0d0d0">bootcmd:</span>
+ <span style="color: #d0d0d0">-</span> <span style="color: #d0d0d0">cloud-init-per instance $(echo &quot;ECS_CLUSTER=${cluster_name}&quot; &gt;&gt; /etc/ecs/ecs.config)</span>
+</code></pre></div>
+
+<p>At this point, we have everything set up! But it won&rsquo;t work, because almost
+everything in AWS is default-deny. We still need to add security groups and IAM
+roles that will allow ecs agent to do its thing.</p>
+
+<h2 id="adding-the-instance-profile-iam-roles">Adding the Instance Profile IAM Roles</h2>
+
+<p>Last step! We&rsquo;re almost there. Though the EC2 instances will now have network
+access to the relevant ECS services, they won&rsquo;t have permission to actually
+<em>do</em> anything.</p>
+
+<p>Thankfully, AWS has us covered here. They&rsquo;ve already defined an IAM policy that
+encompasses everything the ECS Agent needs to run &ndash; it&rsquo;s called
+<code>AmazonEC2ContainerServiceforEC2Role</code>. We just need to give the EC2 service
+permission to do things on our behalf, by letting <code>ec2.amazonaws.com</code> assume
+roles in our account.</p>
+
+<p>Let&rsquo;s do that now:</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-terraform" data-lang="terraform"><span style="color: #999999; font-style: italic"># Define the role.</span>
+<span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_iam_role&quot; &quot;ecs_agent&quot;</span> {
+<span style="color: #bbbbbb">  name</span>               <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;ecs-agent&quot;</span>
+<span style="color: #bbbbbb">  assume_role_policy</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${data.aws_iam_policy_document.ecs_agent.json}&quot;</span>
+}<span style="color: #999999; font-style: italic"></span>
+
+<span style="color: #999999; font-style: italic"># Allow EC2 service to assume this role.</span>
+<span style="color: #a61717; background-color: #e3d2d2">data</span> <span style="color: #ed9d13">&quot;aws_iam_policy_document&quot; &quot;ecs_agent&quot;</span> {
+  <span style="color: #a61717; background-color: #e3d2d2">statement</span> {
+<span style="color: #bbbbbb">    actions</span> <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;sts:AssumeRole&quot;</span><span style="color: #d0d0d0">]</span>
+
+    <span style="color: #a61717; background-color: #e3d2d2">principals</span> {
+<span style="color: #bbbbbb">      type</span>        <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;Service&quot;</span>
+<span style="color: #bbbbbb">      identifiers</span> <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;ec2.amazonaws.com&quot;</span><span style="color: #d0d0d0">]</span>
+    }
+  }
+}<span style="color: #999999; font-style: italic"></span>
+
+<span style="color: #999999; font-style: italic"># Give this role the permission to do ECS Agent things.</span>
+<span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_iam_role_policy_attachment&quot; &quot;ecs_agent&quot;</span> {
+<span style="color: #bbbbbb">  role</span>       <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${aws_iam_role.ecs_agent.name}&quot;</span>
+<span style="color: #bbbbbb">  policy_arn</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role&quot;</span>
+}
+</code></pre></div>
+
+<p>So far, all we&rsquo;ve done is define a role. To actually have the launch
+configuration launch instances that use our role, we have to create an
+<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2_instance-profiles.html">instance profile</a>:</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-terraform" data-lang="terraform"><span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_iam_instance_profile&quot; &quot;ecs_agent&quot;</span> {
+<span style="color: #bbbbbb">  name</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;ecs-agent&quot;</span>
+<span style="color: #bbbbbb">  role</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${aws_iam_role.ecs_agent.name}&quot;</span>
+}
+</code></pre></div>
+
+<p>Phew! And now we&rsquo;re done!</p>
+
+<h1 id="testing-that-this-worked">Testing that this worked</h1>
+
+<p>Let&rsquo;s make sure all of these steps actually worked. First of all, we can see
+that the EC2 instances really were added to the cluster:</p>
+
+<p><img src="/cluster-screenshot-2.png" alt="The cluster with 3 instances in it" /></p>
+
+<p>(Note the &ldquo;3 Container Instances&rdquo; at the bottom right.)</p>
+
+<p>Let&rsquo;s try to prove we can actually run a task on this cluster. Because we&rsquo;re
+running on <code>t2.micro</code> instances, there&rsquo;s not a ton we can actually do, but
+let&rsquo;s try doing a &ldquo;hello world&rdquo;:</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash">aws ecs register-task-definition <span style="color: #ed9d13">\</span>
+  --family hello_world <span style="color: #ed9d13">\</span>
+  --container-definitions <span style="color: #ed9d13">&#39;[{ &quot;name&quot;: &quot;hello_world&quot;, &quot;image&quot;: &quot;ubuntu&quot;, &quot;memory&quot;: 512, &quot;entryPoint&quot;: [&quot;/bin/bash&quot;, &quot;-c&quot;, &quot;echo hello world $(date)&quot;], &quot;logConfiguration&quot;: { &quot;logDriver&quot;: &quot;awslogs&quot;, &quot;options&quot;: { &quot;awslogs-group&quot;: &quot;hello_world&quot;, &quot;awslogs-region&quot;: &quot;us-east-1&quot;, &quot;awslogs-stream-prefix&quot;: &quot;megapool-hello_world&quot; }}}]&#39;</span>
+
+aws ecs run-task <span style="color: #ed9d13">\</span>
+  --cluster megapool <span style="color: #ed9d13">\</span>
+  --task-definition hello_world:1
+</code></pre></div>
+
+<p>That container definition is pretty long-winded, but the gist of it is that
+we&rsquo;re running <code>/bin/bash -c &quot;echo hello world $(date)&quot;</code> on an <code>ubuntu</code> machine.
+We&rsquo;re sending the logs to <a href="https://aws.amazon.com/cloudwatch/">CloudWatch</a>, so we can use any
+cloudwatch reader to read from them. I&rsquo;ll use <a href="https://github.com/segmentio/cwlogs"><code>cwlogs</code></a>:</p>
+
+<pre><code>$ cwlogs fetch hello_world
+[ megapool-hello_world/hello_world/3fadff02-6d81-4197-9321-06d1c910b0d2 ] 04-20 20:44:09 INFO - hello world Sat Apr 21 03:44:09 UTC 2018
+</code></pre>
+
+<p>Hooray!</p>
+
+<h1 id="possible-improvements">Possible Improvements</h1>
+
+<h2 id="security-groups">Security Groups</h2>
+
+<p>We haven&rsquo;t added any security groups to our cluster instances. That means the
+containers on those instances can&rsquo;t talk to anything on the network. This
+wasn&rsquo;t an issue for our <code>hello_world</code> container, but you probably want to allow
+HTTP ingress and egress, as well as SSH traffic to/from your bastion instances.</p>
+
+<h2 id="actual-auto-scaling">Actual auto-scaling</h2>
+
+<p>Right now our &ldquo;auto-scaling group&rdquo; in fact doesn&rsquo;t scale at all. You should fix
+that.</p>
+
+<h2 id="bastion-servers">Bastion Servers</h2>
+
+<p>I mentioned this in the &ldquo;Security Groups&rdquo; improvement, but I&rsquo;ll elaborate here.
+As defined in this post, there&rsquo;s no way to SSH into the cluster instances.
+That&rsquo;s not ideal, and makes debugging stuff <em>much</em> harder. The solution to this
+is to add a <em>bastion server</em>, which exists only to bestow SSH access to other
+services.</p>
+
+<p>The long-and-short of how you&rsquo;d add a bastion is that you&rsquo;d designate one of
+your <em>public</em> subnets as a &ldquo;bastion&rdquo; subnet, containing instances that aren&rsquo;t
+running <em>any</em> code (it&rsquo;s public internet, so you want to make sure to limit
+your exposure). Then, with security groups allow SSH access to the bastion from
+anywhere, and let the bastions start SSH sessions with anything in the private
+subnets. Grant a corresponding rule for your cluster instances that allows
+incoming traffic from the bastion subnet.</p>
+
+<p>On both your bastion and cluster instances, add a public key of your choosing
+for access. Then, you can use SSH forwarding to connect to container instances
+from your personal computer via the bastions.</p>
+
+<h1 id="copy-pasteable-code">Copy-pasteable code</h1>
+
+<p>Here&rsquo;s all the code mentioned above, concatenated into a single file:</p>
+
+<p><em>If you&rsquo;re just here to copy working code, the code below will work. But you
+might want to consider the &ldquo;Possible Improvements&rdquo; above.</em></p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-terraform" data-lang="terraform"><span style="color: #6ab825; font-weight: bold">module</span> <span style="color: #ed9d13">&quot;vpc&quot;</span> {
+<span style="color: #bbbbbb">  source</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;terraform-aws-modules/vpc/aws&quot;</span>
+
+<span style="color: #bbbbbb">  name</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;my-vpc&quot;</span>
+<span style="color: #bbbbbb">  cidr</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;10.0.0.0/16&quot;</span>
+
+<span style="color: #bbbbbb">  azs</span>             <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;us-east-1a&quot;, &quot;us-east-1b&quot;, &quot;us-east-1c&quot;</span><span style="color: #d0d0d0">]</span>
+<span style="color: #bbbbbb">  private_subnets</span> <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;10.0.1.0/24&quot;, &quot;10.0.2.0/24&quot;, &quot;10.0.3.0/24&quot;</span><span style="color: #d0d0d0">]</span>
+<span style="color: #bbbbbb">  public_subnets</span>  <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;10.0.101.0/24&quot;, &quot;10.0.102.0/24&quot;, &quot;10.0.103.0/24&quot;</span><span style="color: #d0d0d0">]</span>
+
+<span style="color: #bbbbbb">  enable_nat_gateway</span> <span style="color: #d0d0d0">=</span> <span style="color: #6ab825; font-weight: bold">true</span>
+<span style="color: #bbbbbb">  enable_vpn_gateway</span> <span style="color: #d0d0d0">=</span> <span style="color: #6ab825; font-weight: bold">true</span>
+}
+
+<span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_ecs_cluster&quot; &quot;cluster&quot;</span> {
+<span style="color: #bbbbbb">  name</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;megapool&quot;</span>
+}
+
+<span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_autoscaling_group&quot; &quot;cluster&quot;</span> {
+<span style="color: #bbbbbb">  name</span>                 <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;megapool&quot;</span>
+<span style="color: #bbbbbb">  vpc_zone_identifier</span>  <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;${module.vpc.private_subnets}&quot;</span><span style="color: #d0d0d0">]</span>
+<span style="color: #bbbbbb">  launch_configuration</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${aws_launch_configuration.cluster.name}&quot;</span>
+
+<span style="color: #bbbbbb">  desired_capacity</span> <span style="color: #d0d0d0">=</span> <span style="color: #3677a9">3</span>
+<span style="color: #bbbbbb">  min_size</span>         <span style="color: #d0d0d0">=</span> <span style="color: #3677a9">3</span>
+<span style="color: #bbbbbb">  max_size</span>         <span style="color: #d0d0d0">=</span> <span style="color: #3677a9">3</span>
+}
+
+<span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_launch_configuration&quot; &quot;cluster&quot;</span> {
+<span style="color: #bbbbbb">  name</span>                 <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;megapool&quot;</span>
+<span style="color: #bbbbbb">  image_id</span>             <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${data.aws_ami.ecs_optimized.id}&quot;</span>
+<span style="color: #bbbbbb">  iam_instance_profile</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${aws_iam_instance_profile.ecs_agent.name}&quot;</span>
+<span style="color: #bbbbbb">  user_data</span>            <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${data.template_file.user_data.rendered}&quot;</span>
+<span style="color: #bbbbbb">  instance_type</span>        <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;t2.micro&quot;</span>
+}
+
+<span style="color: #a61717; background-color: #e3d2d2">data</span> <span style="color: #ed9d13">&quot;aws_ami&quot; &quot;ecs_optimized&quot;</span> {
+  <span style="color: #a61717; background-color: #e3d2d2">filter</span> {
+<span style="color: #bbbbbb">    name</span>   <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;name&quot;</span>
+<span style="color: #bbbbbb">    values</span> <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;amzn-ami-2017.09.l-amazon-ecs-optimized&quot;</span><span style="color: #d0d0d0">]</span>
+  }
+}
+
+<span style="color: #a61717; background-color: #e3d2d2">data</span> <span style="color: #ed9d13">&quot;template_file&quot; &quot;user_data&quot;</span> {
+<span style="color: #bbbbbb">  template</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${file(&quot;${path.module}/user_data.yaml&quot;)}&quot;</span>
+
+  <span style="color: #a61717; background-color: #e3d2d2">vars</span> {
+<span style="color: #bbbbbb">    ecs_cluster</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;megapool&quot;</span>
+  }
+}<span style="color: #999999; font-style: italic"></span>
+
+<span style="color: #999999; font-style: italic"># Define the role.</span>
+<span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_iam_role&quot; &quot;ecs_agent&quot;</span> {
+<span style="color: #bbbbbb">  name</span>               <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;ecs-agent&quot;</span>
+<span style="color: #bbbbbb">  assume_role_policy</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${data.aws_iam_policy_document.ecs_agent.json}&quot;</span>
+}<span style="color: #999999; font-style: italic"></span>
+
+<span style="color: #999999; font-style: italic"># Allow EC2 service to assume this role.</span>
+<span style="color: #a61717; background-color: #e3d2d2">data</span> <span style="color: #ed9d13">&quot;aws_iam_policy_document&quot; &quot;ecs_agent&quot;</span> {
+  <span style="color: #a61717; background-color: #e3d2d2">statement</span> {
+<span style="color: #bbbbbb">    actions</span> <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;sts:AssumeRole&quot;</span><span style="color: #d0d0d0">]</span>
+
+    <span style="color: #a61717; background-color: #e3d2d2">principals</span> {
+<span style="color: #bbbbbb">      type</span>        <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;Service&quot;</span>
+<span style="color: #bbbbbb">      identifiers</span> <span style="color: #d0d0d0">=</span> <span style="color: #d0d0d0">[</span><span style="color: #ed9d13">&quot;ec2.amazonaws.com&quot;</span><span style="color: #d0d0d0">]</span>
+    }
+  }
+}<span style="color: #999999; font-style: italic"></span>
+
+<span style="color: #999999; font-style: italic"># Give this role the permission to do ECS Agent things.</span>
+<span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_iam_role_policy_attachment&quot; &quot;ecs_agent&quot;</span> {
+<span style="color: #bbbbbb">  role</span>       <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${aws_iam_role.ecs_agent.name}&quot;</span>
+<span style="color: #bbbbbb">  policy_arn</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role&quot;</span>
+}
+
+<span style="color: #6ab825; font-weight: bold">resource</span> <span style="color: #ed9d13">&quot;aws_iam_instance_profile&quot; &quot;ecs_agent&quot;</span> {
+<span style="color: #bbbbbb">  name</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;ecs-agent&quot;</span>
+<span style="color: #bbbbbb">  role</span> <span style="color: #d0d0d0">=</span> <span style="color: #ed9d13">&quot;${aws_iam_role.ecs_agent.name}&quot;</span>
+}
+</code></pre></div>
+
+<p>You also need to add <code>user_data.yaml</code> alongside the <code>*.tf</code> file:</p>
+<div class="highlight" style="background: #202020"><pre style="line-height: 125%"><code class="language-yaml" data-lang="yaml"><span style="color: #999999; font-style: italic">#cloud-config</span>
+<span style="color: #d0d0d0">bootcmd:</span>
+ <span style="color: #d0d0d0">-</span> <span style="color: #d0d0d0">cloud-init-per instance $(echo &quot;ECS_CLUSTER=${cluster_name}&quot; &gt;&gt; /etc/ecs/ecs.config)</span>
+</code></pre></div>
+
+    </div>
+ 
+    <ul class="article-taxonomy">
+      
+    
+      
+  </article>
+
+</main>
+
+      <footer class="footer">
+        <ul class="footer-links">
+          <li>
+            <a href="http://blog.ulysse.io/index.xml" type="application/rss+xml" target="_blank"><i class="fa fa-rss"></i> RSS feed</a>
+          </li>
+          <li>
+            <a href="https://github.com/mobybit/hugo-natrium-theme"><i class="fa fa-github"></i> Code</a>
+          </li>
+          <li>
+            <a href="http://blog.ulysse.io/site-notice">Site notice</a>
+          </li>
+        </ul>
+      </footer>
+
+    </div>
+
+  </body>
+</html>
+
