@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="generator" content="Hugo 0.42.1" />
+
+
+<title>Minecraft Server with Backups via systemd - Odyssey: Ulysse&#39;s Blog</title>
+<meta property="og:title" content="Minecraft Server with Backups via systemd - Odyssey: Ulysse&#39;s Blog">
+
+
+
+  
+
+
+
+
+
+
+<link rel="stylesheet" href="http://blog.ulysse.io/css/main.css" media="all">
+<link rel="stylesheet" href="http://blog.ulysse.io/css/fonts.css">
+
+  </head>
+  <body>
+    <div class="wrapper">
+      <header class="header">
+        <nav class="nav">
+  <a href="http://blog.ulysse.io/" class="nav-logo">
+    <img src="http://blog.ulysse.io/images/icon.png" 
+         width="50" 
+         height="50" 
+         alt="Logo">
+  </a>
+
+  <ul class="nav-links">
+    
+    <li><a href="https://ulysse.io">About Me</a></li>
+    
+    <li><a href="/">Blog Index</a></li>
+    
+  </ul>
+</nav>
+
+      </header>
+
+
+<main class="content" role="main">
+  <article class="article">
+    <h1 class="article-title">Minecraft Server with Backups via systemd</h1>
+    
+    <span class="article-date">2016-08-31</span>
+    
+
+    <div class="article-content">
+      
+
+<p>In this post, I&rsquo;ll describe how to use
+<a href="https://en.wikipedia.org/wiki/Systemd">systemd</a> to manage a Minecraft server. A
+named pipe will allow us to send commands to that server, which we&rsquo;ll use in
+order to set up a job that periodically makes backups and uploads them to Google
+drive. This may sound fancy, but luckily systemd makes this a breeze to set up,
+once you&rsquo;ve done a little Googling.</p>
+
+<p>This tutorial does not assume you&rsquo;ve ever set up a Minecraft server before. You
+don&rsquo;t need to be familiar with <code>systemd</code>, but you should know how to use Ubuntu
+at a basic level. I won&rsquo;t cover how to set up an Ubuntu server.</p>
+
+<p>Let&rsquo;s get started!</p>
+
+<h1 id="setting-up-a-minecraft-server-as-a-service">Setting up a Minecraft-Server-as-a-Service</h1>
+
+<p>First, we must create a systemd service that runs a Minecraft server. You don&rsquo;t
+want to run that server as root, so create a <code>minecraft</code> user and group:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span>$ useradd minecraft
+</code></pre></div>
+
+<p>Next, install the Java Runtime Environment:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span>$ sudo apt-get install openjdk-9-jre-headless
+</code></pre></div>
+
+<p>Next, let&rsquo;s create a directory to run the server from. The Minecraft server JAR
+will go in this directory.</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span>$ mkdir /srv/minecraft/
+$ <span style="color: #f8f8f2">cd</span> /srv/minecraft/
+$ curl -o minecraft_server.jar https://s3.amazonaws.com/Minecraft.Download/versions/1.10.2/minecraft_server.1.10.2.jar
+</code></pre></div>
+
+<p>At this point, you could start a server by running:</p>
+
+<pre><code>$ java -jar minecraft_server.jar
+</code></pre>
+
+<p>Instead, we&rsquo;ll create a service that does almost the same thing, but runs as the
+<code>minecraft</code> user we just created.</p>
+
+<p>Create <code>/etc/systemd/system/minecraft-server.service</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-ini" data-lang="ini"><span></span><span style="color: #66d9ef">[Unit]</span>
+<span style="color: #a6e22e">Description</span><span style="color: #f92672">=</span><span style="color: #e6db74">Minecraft server</span>
+
+<span style="color: #66d9ef">[Service]</span>
+<span style="color: #a6e22e">WorkingDirectory</span><span style="color: #f92672">=</span><span style="color: #e6db74">/srv/minecraft</span>
+<span style="color: #a6e22e">User</span><span style="color: #f92672">=</span><span style="color: #e6db74">minecraft</span>
+<span style="color: #a6e22e">Group</span><span style="color: #f92672">=</span><span style="color: #e6db74">minecraft</span>
+<span style="color: #a6e22e">ExecStart</span><span style="color: #f92672">=</span><span style="color: #e6db74">/srv/minecraft/run-server.sh</span>
+
+<span style="color: #66d9ef">[Install]</span>
+<span style="color: #a6e22e">WantedBy</span><span style="color: #f92672">=</span><span style="color: #e6db74">multi-user.target</span>
+</code></pre></div>
+
+<p>As you can probably guess, this will invoke a file named <code>run-server.sh</code>. Let&rsquo;s
+create this file in <code>/srv/minecraft/run-server.sh</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span><span style="color: #75715e">#!/bin/bash</span>
+
+tail -f /tmp/minecraft_server_in <span style="color: #f8f8f2">|</span> java -jar minecraft_server.jar
+</code></pre></div>
+
+<p>You&rsquo;ll need to <code>chmod +x run-server.sh</code>.</p>
+
+<p>Before this script can work, we must create a named pipe at
+<code>/tmp/minecraft_server_in</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span>$ mkfifo /tmp/minecraft_server_in
+</code></pre></div>
+
+<p>And that&rsquo;s it, you&rsquo;ve service-ized Minecraft! You can start the server by
+running:</p>
+
+<pre><code>$ service minecraft-server start
+</code></pre>
+
+<p>You can test that the input is working by connecting to your new server, and
+running:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span>$ <span style="color: #f8f8f2">echo</span> <span style="color: #e6db74">&quot;time set day&quot;</span> &gt;&gt; /tmp/minecraft_server_in
+</code></pre></div>
+
+<p>Hopefully, dawn&rsquo;s rosy-red fingers should caress your realm.</p>
+
+<h1 id="adding-a-backup-job">Adding a backup job</h1>
+
+<p>To take a backup of a Minecraft server, you need to copy the <code>world</code> directory
+in <code>/srv/minecraft</code>. However, you can&rsquo;t simply copy that directory at any time;
+you need to disable &ldquo;auto-saving&rdquo; first. Otherwise, you may get a corrupted copy
+of the data, since you might be reading a file while the server is still writing
+to it.</p>
+
+<p>Luckily, the Minecraft server has some commands to deal with this:</p>
+
+<ul>
+<li><code>save-off</code> disables auto-saving</li>
+<li><code>save-on</code> enables auto-saving</li>
+<li><code>save-all</code> saves the server</li>
+</ul>
+
+<p>Our approach will be to tell the server to <code>save-off</code>, then <code>save-all</code>. We&rsquo;ll
+then monitor the server&rsquo;s logs, waiting for the server to output &ldquo;Saved the
+world&rdquo;. Once that happens, we&rsquo;ll copy the <code>world</code> directory. When we&rsquo;re
+finished, we run <code>save-on</code>.</p>
+
+<p>Create a backup script called <code>/srv/minecraft/backup-job.sh</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span><span style="color: #75715e">#!/bin/bash</span>
+
+<span style="color: #f8f8f2">echo</span> <span style="color: #e6db74">&quot;save-off&quot;</span> &gt;&gt; /tmp/minecraft_server_in
+<span style="color: #f8f8f2">echo</span> <span style="color: #e6db74">&quot;save-all&quot;</span> &gt;&gt; /tmp/minecraft_server_in
+<span style="color: #75715e"># See comment below</span>
+<span style="color: #f8f8f2">echo</span> <span style="color: #e6db74">&quot;seed&quot;</span> &gt;&gt; /tmp/minecraft_server_in
+
+<span style="color: #75715e"># `journalctl -f` produces an infinite stream of output from the Minecraft server.</span>
+<span style="color: #75715e"># `sed` will quit once one of those lines matches &quot;Saved the world&quot;. Once `sed`</span>
+<span style="color: #75715e"># dies, `journalctl` will die the next time it logs anything -- it will receive a</span>
+<span style="color: #75715e"># SIGPIPE. That&#39;s why we send &quot;seed&quot; to the server -- it will generate additional</span>
+<span style="color: #75715e"># logs that will cause `journalctl` to die. The `stdbuf -oL` is to prevent</span>
+<span style="color: #75715e"># buffering from delaying the SIGPIPE.</span>
+stdbuf -oL journalctl --since <span style="color: #e6db74">&quot;3 seconds ago&quot;</span> -f -u minecraft-server.service <span style="color: #f8f8f2">|</span> sed <span style="color: #e6db74">&#39;/\[Server thread\/INFO\]: Saved the world/q&#39;</span>
+
+<span style="color: #75715e"># If there&#39;s a particular directory you want to put this in, look into the</span>
+<span style="color: #75715e"># --parent option.</span>
+gdrive upload backup.zip --name <span style="color: #e6db74">&quot;backup-</span><span style="color: #66d9ef">$(</span>date<span style="color: #66d9ef">)</span><span style="color: #e6db74">.zip&quot;</span>
+rm backup.zip
+
+<span style="color: #f8f8f2">echo</span> <span style="color: #e6db74">&quot;save-on&quot;</span> &gt;&gt; /tmp/minecraft_server_in
+</code></pre></div>
+
+<p>Run <code>chmod +x</code> on this file. Before this script can work, you need to set up
+<code>gdrive</code>. Do so by running:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span><span style="color: #75715e"># This assumes you&#39;re using Ubuntu 64-bit. If not, you can use another download</span>
+<span style="color: #75715e"># link from https://github.com/prasmussen/gdrive</span>
+$ curl -o /usr/local/bin/gdrive -L https://docs.google.com/uc?id<span style="color: #f92672">=</span>0B3X9GlR6EmbnQ0FtZmJJUXEyRTA<span style="color: #ae81ff">\&amp;</span><span style="color: #f8f8f2">export</span><span style="color: #f92672">=</span>download
+</code></pre></div>
+
+<p>As the <code>minecraft</code> user (run <code>su minecraft</code>), run <code>gdrive list</code> and it&rsquo;ll help
+you with the Google API key shenanigans.</p>
+
+<p>You&rsquo;ll also need to add <code>minecraft</code> to two groups in order to silence a warning:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span>$ usermod -G adm -a minecraft
+$ usermod -G systemd-journal -a minecraft
+$ id minecraft
+<span style="color: #f8f8f2">uid</span><span style="color: #f92672">=</span><span style="color: #ae81ff">1000</span><span style="color: #f92672">(</span>minecraft<span style="color: #f92672">)</span> <span style="color: #f8f8f2">gid</span><span style="color: #f92672">=</span><span style="color: #ae81ff">1000</span><span style="color: #f92672">(</span>minecraft<span style="color: #f92672">)</span> <span style="color: #f8f8f2">groups</span><span style="color: #f92672">=</span><span style="color: #ae81ff">1000</span><span style="color: #f92672">(</span>minecraft<span style="color: #f92672">)</span>,4<span style="color: #f92672">(</span>adm<span style="color: #f92672">)</span>,101<span style="color: #f92672">(</span>systemd-journal<span style="color: #f92672">)</span>
+</code></pre></div>
+
+<p>At this point, you should be able to run <code>backup-job.sh</code> successfully. Once it
+finishes executing, you should be able to find a file called &ldquo;backup-Some Date
+Here.zip&rdquo;.</p>
+
+<p>Next, we&rsquo;ll need to create a systemd service and a systemd timer. The timer will
+invoke the service periodically, and our new service will run <code>backup-job.sh</code>.</p>
+
+<p>Create the service in <code>/etc/systemd/system/minecraft-backup.service</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-ini" data-lang="ini"><span></span><span style="color: #66d9ef">[Unit]</span>
+<span style="color: #a6e22e">Description</span><span style="color: #f92672">=</span><span style="color: #e6db74">Minecraft Backup</span>
+
+<span style="color: #66d9ef">[Service]</span>
+<span style="color: #a6e22e">Type</span><span style="color: #f92672">=</span><span style="color: #e6db74">oneshot</span>
+<span style="color: #a6e22e">User</span><span style="color: #f92672">=</span><span style="color: #e6db74">minecraft</span>
+<span style="color: #a6e22e">Group</span><span style="color: #f92672">=</span><span style="color: #e6db74">minecraft</span>
+<span style="color: #a6e22e">WorkingDirectory</span><span style="color: #f92672">=</span><span style="color: #e6db74">/srv/minecraft</span>
+<span style="color: #a6e22e">ExecStart</span><span style="color: #f92672">=</span><span style="color: #e6db74">/srv/minecraft/backup-job.sh</span>
+</code></pre></div>
+
+<p>Enable this service with:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span>$ systemctl <span style="color: #f8f8f2">enable</span> minecraft-backup.service
+</code></pre></div>
+
+<p>You can verify the service works by running:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span>$ service minecraft-backup start
+</code></pre></div>
+
+<p>A backup should appear in your Google Drive.</p>
+
+<p>Next, create the timer in <code>/etc/systemd/system/minecraft-backup.timer</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-ini" data-lang="ini"><span></span><span style="color: #66d9ef">[Unit]</span>
+<span style="color: #a6e22e">Description</span><span style="color: #f92672">=</span><span style="color: #e6db74">Run minecraft-backup.service daily</span>
+
+<span style="color: #66d9ef">[Timer]</span>
+<span style="color: #a6e22e">OnCalendar</span><span style="color: #f92672">=</span><span style="color: #e6db74">*-*-* 12:00:00</span>
+
+<span style="color: #66d9ef">[Install]</span>
+<span style="color: #a6e22e">WantedBy</span><span style="color: #f92672">=</span><span style="color: #e6db74">multi-user.target</span>
+</code></pre></div>
+
+<p>This timer will execute <code>minecraft-backup.service</code> every day at 12PM. My
+server&rsquo;s clock is on UTC; 12PM UTC is early in the morning in California, where
+I live.</p>
+
+<p>Kick off your timer by running:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span>$ systemctl <span style="color: #f8f8f2">enable</span> minecraft-backup.timer
+$ systemctl start minecraft-backup.timer
+</code></pre></div>
+
+<p>You can check on your timer with <code>systemctl list-timers</code>.</p>
+
+<p>And that&rsquo;s it, you now have automatic backups! Now go out and have fun.</p>
+
+<p>If you notice any errors or shortcomings in this post, please let me know! You
+can reach me by emailing: ulysse@ulysse.io .</p>
+
+    </div>
+ 
+    <ul class="article-taxonomy">
+      
+    
+      
+  </article>
+
+</main>
+
+      <footer class="footer">
+        <ul class="footer-links">
+          <li>
+            <a href="http://blog.ulysse.io/index.xml" type="application/rss+xml" target="_blank"><i class="fa fa-rss"></i> RSS feed</a>
+          </li>
+          <li>
+            <a href="https://github.com/mobybit/hugo-natrium-theme"><i class="fa fa-github"></i> Code</a>
+          </li>
+          <li>
+            <a href="http://blog.ulysse.io/site-notice">Site notice</a>
+          </li>
+        </ul>
+      </footer>
+
+    </div>
+
+  </body>
+</html>
+

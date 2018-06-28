@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="generator" content="Hugo 0.42.1" />
+
+
+<title>A Toy Front-End for LLVM, written in Rust - Odyssey: Ulysse&#39;s Blog</title>
+<meta property="og:title" content="A Toy Front-End for LLVM, written in Rust - Odyssey: Ulysse&#39;s Blog">
+
+
+
+  
+
+
+
+
+
+
+<link rel="stylesheet" href="http://blog.ulysse.io/css/main.css" media="all">
+<link rel="stylesheet" href="http://blog.ulysse.io/css/fonts.css">
+
+  </head>
+  <body>
+    <div class="wrapper">
+      <header class="header">
+        <nav class="nav">
+  <a href="http://blog.ulysse.io/" class="nav-logo">
+    <img src="http://blog.ulysse.io/images/icon.png" 
+         width="50" 
+         height="50" 
+         alt="Logo">
+  </a>
+
+  <ul class="nav-links">
+    
+    <li><a href="https://ulysse.io">About Me</a></li>
+    
+    <li><a href="/">Blog Index</a></li>
+    
+  </ul>
+</nav>
+
+      </header>
+
+
+<main class="content" role="main">
+  <article class="article">
+    <h1 class="article-title">A Toy Front-End for LLVM, written in Rust</h1>
+    
+    <span class="article-date">2016-07-03</span>
+    
+
+    <div class="article-content">
+      
+
+<p>My current side project is a compiler written in Rust that emits LLVM IR. LLVM&rsquo;s
+API is a bit daunting for noobs, and there aren&rsquo;t many tutorials out there (and
+they&rsquo;re all in C++, so it&rsquo;s not always obvious how to do the same in Rust). I
+wish someone had held my hand as I got started with this, so here&rsquo;s what I would
+have shown myself.</p>
+
+<p>For Rust, your best option for interfacing with LLVM is through the <code>llvm-sys</code>
+crate. A kind person on the Internet hosts docs for it
+<a href="http://rustdoc.taricorp.net/llvm-sys/llvm_sys/">here</a>. Of course, you should
+also check out <a href="http://llvm.org/docs/tutorial/LangImpl01.html">LLVM&rsquo;s tutorial</a>,
+since it helps you understand how LLVM &ldquo;thinks&rdquo;. This post is basically a Rust
+translation of a subset of LLVM&rsquo;s tutorial.</p>
+
+<p>You can check out the final code for this post
+<a href="https://github.com/ucarion/llvm-rust-getting-started">here</a>.</p>
+
+<h1 id="getting-a-working-development-environment">Getting a working development environment</h1>
+
+<p>For starters, here&rsquo;s a reproducible way to get hacking with LLVM:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-bash" data-lang="bash"><span></span><span style="color: #75715e"># `curl` is just so we can next install Rust</span>
+sudo apt-get -y install clang curl llvm-3.8-dev
+curl https://sh.rustup.rs -sSf <span style="color: #f8f8f2">|</span> sh
+
+<span style="color: #75715e"># The `llvm-sys` crate expects something called `llvm-config` on your PATH.</span>
+sudo ln -s /usr/bin/llvm-config-3.8 /usr/bin/llvm-config
+</code></pre></div>
+
+<p>If you run that on a recent Ubuntu (you may need to <code>apt-get update</code>), you&rsquo;ll be
+ready to go. Alternatively, you could run that inside a Vagrant box, with the
+following <code>Vagrantfile</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-ruby" data-lang="ruby"><span></span><span style="color: #66d9ef">Vagrant</span><span style="color: #f92672">.</span><span style="color: #f8f8f2">configure(</span><span style="color: #e6db74">&quot;2&quot;</span><span style="color: #f8f8f2">)</span> <span style="color: #66d9ef">do</span> <span style="color: #f92672">|</span><span style="color: #f8f8f2">config</span><span style="color: #f92672">|</span>
+  <span style="color: #f8f8f2">config</span><span style="color: #f92672">.</span><span style="color: #f8f8f2">vm</span><span style="color: #f92672">.</span><span style="color: #f8f8f2">box</span> <span style="color: #f92672">=</span> <span style="color: #e6db74">&quot;bento/ubuntu-16.04&quot;</span>
+<span style="color: #66d9ef">end</span>
+</code></pre></div>
+
+<p>You can get started by running <code>cargo init llvm-example --bin</code> and putting the
+following (taken from llvm-sys) in <code>src/main.rs</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #e6db74">//! Construct a function that does nothing in LLVM IR.</span>
+
+<span style="color: #66d9ef">extern</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">crate</span><span style="color: #f8f8f2"> llvm_sys </span><span style="color: #66d9ef">as</span><span style="color: #f8f8f2"> llvm;</span>
+
+<span style="color: #66d9ef">use</span><span style="color: #f8f8f2"> std</span>::<span style="color: #f8f8f2">ptr;</span>
+
+<span style="color: #66d9ef">fn</span> <span style="color: #a6e22e">main</span><span style="color: #f8f8f2">() {</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">unsafe</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// Set up a context, module and builder in that context.</span>
+<span style="color: #f8f8f2">        </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> context </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMContextCreate();</span>
+<span style="color: #f8f8f2">        </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> module </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMModuleCreateWithName(</span><span style="color: #e6db74">b&quot;nop</span><span style="color: #ae81ff">\0</span><span style="color: #e6db74">&quot;</span><span style="color: #f8f8f2">.as_ptr() </span><span style="color: #66d9ef">as</span><span style="color: #f8f8f2"> </span><span style="color: #f92672">*</span><span style="color: #66d9ef">const</span><span style="color: #f8f8f2"> _);</span>
+<span style="color: #f8f8f2">        </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> builder </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMCreateBuilderInContext(context);</span>
+
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// Get the type signature for void nop(void);</span>
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// Then create it in our module.</span>
+<span style="color: #f8f8f2">        </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> void </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMVoidTypeInContext(context);</span>
+<span style="color: #f8f8f2">        </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> function_type </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMFunctionType(void, ptr</span>::<span style="color: #f8f8f2">null_mut(), </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">, </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">);</span>
+<span style="color: #f8f8f2">        </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> function </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMAddFunction(module, </span><span style="color: #e6db74">b&quot;nop</span><span style="color: #ae81ff">\0</span><span style="color: #e6db74">&quot;</span><span style="color: #f8f8f2">.as_ptr() </span><span style="color: #66d9ef">as</span><span style="color: #f8f8f2"> </span><span style="color: #f92672">*</span><span style="color: #66d9ef">const</span><span style="color: #f8f8f2"> _,</span>
+<span style="color: #f8f8f2">                                                   function_type);</span>
+
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// Create a basic block in the function and set our builder to generate</span>
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// code in it.</span>
+<span style="color: #f8f8f2">        </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> bb </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMAppendBasicBlockInContext(context, function,</span>
+<span style="color: #f8f8f2">                                                           </span><span style="color: #e6db74">b&quot;entry</span><span style="color: #ae81ff">\0</span><span style="color: #e6db74">&quot;</span><span style="color: #f8f8f2">.as_ptr() </span><span style="color: #66d9ef">as</span><span style="color: #f8f8f2"> </span><span style="color: #f92672">*</span><span style="color: #66d9ef">const</span><span style="color: #f8f8f2"> _);</span>
+<span style="color: #f8f8f2">        llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMPositionBuilderAtEnd(builder, bb);</span>
+
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// Emit a `ret void` into the function</span>
+<span style="color: #f8f8f2">        llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildRetVoid(builder);</span>
+
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// Dump the module as IR to stdout.</span>
+<span style="color: #f8f8f2">        llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMDumpModule(module);</span>
+
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// Clean up. Values created in the context mostly get cleaned up there.</span>
+<span style="color: #f8f8f2">        llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMDisposeBuilder(builder);</span>
+<span style="color: #f8f8f2">        llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMDisposeModule(module);</span>
+<span style="color: #f8f8f2">        llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMContextDispose(context);</span>
+<span style="color: #f8f8f2">    }</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<p>And in your <code>Cargo.toml</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-text" data-lang="text"><span></span>[package]
+name = &quot;llvm-example&quot;
+version = &quot;0.1.0&quot;
+authors = [&quot;Ulysse Carion &lt;ulysse@ulysse.io&gt;&quot;]
+
+[[bin]]
+name = &quot;main&quot;
+
+[dependencies]
+llvm-sys = &quot;0.2&quot;
+</code></pre></div>
+
+<p>You should get:</p>
+
+<pre><code>vagrant@vagrant:/vagrant$ cargo run
+   Compiling llvm-example v0.1.0 (file:///vagrant)
+     Running `target/debug/main`
+; ModuleID = 'nop'
+
+define void @nop() {
+entry:
+  ret void
+}
+</code></pre>
+
+<p>Hooray! Now we can start writing our own stuff.</p>
+
+<h1 id="a-slightly-less-trivial-program">A slightly less trivial program</h1>
+
+<p>To get started, let&rsquo;s compile a program that simply sets a return code, by
+<code>ret</code>urning an integer from a function called <code>main</code>.</p>
+
+<p>Here&rsquo;s how I did it: (We&rsquo;re gonna need a parser at some point, so I added it
+now; I used the <code>peg</code> crate):</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #75715e">#![feature(plugin)]</span><span style="color: #f8f8f2"></span>
+<span style="color: #75715e">#![plugin(peg_syntax_ext)]</span><span style="color: #f8f8f2"></span>
+
+<span style="color: #66d9ef">extern</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">crate</span><span style="color: #f8f8f2"> llvm_sys </span><span style="color: #66d9ef">as</span><span style="color: #f8f8f2"> llvm;</span>
+
+<span style="color: #66d9ef">use</span><span style="color: #f8f8f2"> std</span>::<span style="color: #f8f8f2">ffi</span>::<span style="color: #f8f8f2">CString;</span>
+<span style="color: #66d9ef">use</span><span style="color: #f8f8f2"> std</span>::<span style="color: #f8f8f2">fs</span>::<span style="color: #f8f8f2">File;</span>
+<span style="color: #66d9ef">use</span><span style="color: #f8f8f2"> std</span>::<span style="color: #f8f8f2">io</span>::<span style="color: #f8f8f2">Read;</span>
+<span style="color: #66d9ef">use</span><span style="color: #f8f8f2"> std</span>::<span style="color: #f8f8f2">ptr;</span>
+
+<span style="color: #66d9ef">fn</span> <span style="color: #a6e22e">main</span><span style="color: #f8f8f2">() {</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> input </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> String</span>::<span style="color: #f8f8f2">new();</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> f </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> File</span>::<span style="color: #f8f8f2">open(</span><span style="color: #e6db74">&quot;in.ex&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #f8f8f2">    f.read_to_string(</span><span style="color: #f92672">&amp;</span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> input).unwrap();</span>
+
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> parsed_input </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> parser</span>::<span style="color: #f8f8f2">program(</span><span style="color: #f92672">&amp;</span><span style="color: #f8f8f2">input).unwrap();</span>
+
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">unsafe</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">        codegen(parsed_input);</span>
+<span style="color: #f8f8f2">    }</span>
+<span style="color: #f8f8f2">}</span>
+
+<span style="color: #f8f8f2">peg</span><span style="color: #f92672">!</span><span style="color: #f8f8f2"> parser(r</span><span style="color: #960050; background-color: #1e0010">#</span><span style="color: #e6db74">&quot;</span>
+<span style="color: #e6db74">    #[pub]</span>
+<span style="color: #e6db74">    program -&gt; String</span>
+<span style="color: #e6db74">        = i:int_literal &quot;</span><span style="color: #960050; background-color: #1e0010">\</span><span style="color: #f8f8f2">n</span><span style="color: #e6db74">&quot; { i }</span>
+
+<span style="color: #e6db74">    int_literal -&gt; String</span>
+<span style="color: #e6db74">        = [0-9]+ { match_str.to_owned() }</span>
+<span style="color: #e6db74">&quot;</span><span style="color: #960050; background-color: #1e0010">#</span><span style="color: #f8f8f2">);</span>
+
+<span style="color: #66d9ef">unsafe</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">fn</span> <span style="color: #a6e22e">codegen</span><span style="color: #f8f8f2">(input</span>: <span style="color: #f8f8f2">String) {</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> context </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMContextCreate();</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> module </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMModuleCreateWithName(</span><span style="color: #e6db74">b&quot;example_module</span><span style="color: #ae81ff">\0</span><span style="color: #e6db74">&quot;</span><span style="color: #f8f8f2">.as_ptr() </span><span style="color: #66d9ef">as</span><span style="color: #f8f8f2"> </span><span style="color: #f92672">*</span><span style="color: #66d9ef">const</span><span style="color: #f8f8f2"> _);</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> builder </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMCreateBuilderInContext(context);</span>
+
+<span style="color: #f8f8f2">    </span><span style="color: #75715e">// In LLVM, you get your types from functions.</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> int_type </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMInt64TypeInContext(context);</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> function_type </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMFunctionType(int_type, ptr</span>::<span style="color: #f8f8f2">null_mut(), </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">, </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">);</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> function </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMAddFunction(module, </span><span style="color: #e6db74">b&quot;main</span><span style="color: #ae81ff">\0</span><span style="color: #e6db74">&quot;</span><span style="color: #f8f8f2">.as_ptr() </span><span style="color: #66d9ef">as</span><span style="color: #f8f8f2"> </span><span style="color: #f92672">*</span><span style="color: #66d9ef">const</span><span style="color: #f8f8f2"> _, function_type);</span>
+
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> entry_name </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> CString</span>::<span style="color: #f8f8f2">new(</span><span style="color: #e6db74">&quot;entry&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> bb </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMAppendBasicBlockInContext(context, function, entry_name.as_ptr());</span>
+<span style="color: #f8f8f2">    llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMPositionBuilderAtEnd(builder, bb);</span>
+
+<span style="color: #f8f8f2">    </span><span style="color: #75715e">// The juicy part: construct a `LLVMValue` from a Rust value:</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> int_value</span>: <span style="color: #66d9ef">u64</span> <span style="color: #f92672">=</span><span style="color: #f8f8f2"> input.parse().unwrap();</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> int_value </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMConstInt(int_type, int_value, </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">);</span>
+
+<span style="color: #f8f8f2">    llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildRet(builder, int_value);</span>
+
+<span style="color: #f8f8f2">    </span><span style="color: #75715e">// Instead of dumping to stdout, let&#39;s write out the IR to `out.ll`</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> out_file </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> CString</span>::<span style="color: #f8f8f2">new(</span><span style="color: #e6db74">&quot;out.ll&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #f8f8f2">    llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMPrintModuleToFile(module, out_file.as_ptr(), ptr</span>::<span style="color: #f8f8f2">null_mut());</span>
+
+<span style="color: #f8f8f2">    llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMDisposeBuilder(builder);</span>
+<span style="color: #f8f8f2">    llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMDisposeModule(module);</span>
+<span style="color: #f8f8f2">    llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMContextDispose(context);</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<p>It works! Check it out:</p>
+
+<pre><code>vagrant@vagrant:/vagrant$ cat in.ex
+42
+vagrant@vagrant:/vagrant$ cargo run
+     Running `target/debug/main`
+vagrant@vagrant:/vagrant$ lli-3.8 out.ll ; echo $?
+42
+</code></pre>
+
+<p>Cool! And here&rsquo;s what <code>out.ll</code> looks like, btw:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-llvm" data-lang="llvm"><span></span><span style="color: #75715e">; ModuleID = &#39;example_module&#39;</span>
+
+<span style="color: #66d9ef">define</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">@main()</span> <span style="color: #f8f8f2">{</span>
+<span style="color: #f8f8f2">entry:</span>
+  <span style="color: #66d9ef">ret</span> <span style="color: #66d9ef">i64</span> <span style="color: #ae81ff">42</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<h1 id="arithmetic">Arithmetic</h1>
+
+<p>Let&rsquo;s add support for adding, subtracting, multiplying, and dividing numbers. To do that, we need to extend our grammar. Let&rsquo;s introduce an enum to represent the AST:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #66d9ef">pub</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">enum</span> <span style="color: #a6e22e">Expr</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">    Add(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Sub(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Mul(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Div(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Literal(String),</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<p>We also need to extend our grammar:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #75715e">// `product` and `sum` are that way to get operator precedence</span>
+<span style="color: #f8f8f2">peg</span><span style="color: #f92672">!</span><span style="color: #f8f8f2"> parser(r</span><span style="color: #960050; background-color: #1e0010">#</span><span style="color: #e6db74">&quot;</span>
+<span style="color: #e6db74">    use super::Expr;</span>
+
+<span style="color: #e6db74">    #[pub]</span>
+<span style="color: #e6db74">    program -&gt; Expr</span>
+<span style="color: #e6db74">        = e:expression &quot;</span><span style="color: #960050; background-color: #1e0010">\</span><span style="color: #f8f8f2">n</span><span style="color: #e6db74">&quot; { e }</span>
+
+<span style="color: #e6db74">    expression -&gt; Expr</span>
+<span style="color: #e6db74">        = sum</span>
+
+<span style="color: #e6db74">    sum -&gt; Expr</span>
+<span style="color: #e6db74">        = a:product _ &quot;</span><span style="color: #f92672">+</span><span style="color: #e6db74">&quot; _ b:sum { Expr::Add(Box::new(a), Box::new(b)) }</span>
+<span style="color: #e6db74">        / a:product _ &quot;</span><span style="color: #f92672">-</span><span style="color: #e6db74">&quot; _ b:sum { Expr::Sub(Box::new(a), Box::new(b)) }</span>
+<span style="color: #e6db74">        / product</span>
+
+<span style="color: #e6db74">    product -&gt; Expr</span>
+<span style="color: #e6db74">        = a:int_literal _ &quot;</span><span style="color: #f92672">*</span><span style="color: #e6db74">&quot; _ b:product { Expr::Mul(Box::new(a), Box::new(b)) }</span>
+<span style="color: #e6db74">        / a:int_literal _ &quot;</span><span style="color: #f92672">/</span><span style="color: #e6db74">&quot; _ b:product { Expr::Div(Box::new(a), Box::new(b)) }</span>
+<span style="color: #e6db74">        / int_literal</span>
+
+<span style="color: #e6db74">    int_literal -&gt; Expr</span>
+<span style="color: #e6db74">        = [0-9]+ { Expr::Literal(match_str.to_owned()) }</span>
+
+<span style="color: #e6db74">    _ = &quot;</span><span style="color: #f8f8f2"> </span><span style="color: #e6db74">&quot;*</span>
+<span style="color: #e6db74">&quot;</span><span style="color: #960050; background-color: #1e0010">#</span><span style="color: #f8f8f2">);</span>
+</code></pre></div>
+
+<p>Next, let&rsquo;s emit code. You can specify strings like &ldquo;addtmp&rdquo;, and these will be
+used as part of the name of the corresponding &ldquo;register&rdquo; in the IR.</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #75715e">// When you write out instructions in LLVM, you get back `LLVMValueRef`s. You</span>
+<span style="color: #75715e">// can then use these references in other instructions.</span>
+<span style="color: #66d9ef">unsafe</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">fn</span> <span style="color: #a6e22e">codegen_expr</span><span style="color: #f8f8f2">(context</span>: <span style="color: #a6e22e">LLVMContextRef</span><span style="color: #f8f8f2">, builder</span>: <span style="color: #a6e22e">LLVMBuilderRef</span><span style="color: #f8f8f2">, expr</span>: <span style="color: #a6e22e">Expr</span><span style="color: #f8f8f2">) </span>-&gt; <span style="color: #a6e22e">LLVMValueRef</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">match</span><span style="color: #f8f8f2"> expr {</span>
+<span style="color: #f8f8f2">        Expr</span>::<span style="color: #f8f8f2">Literal(int_literal) </span><span style="color: #f92672">=&gt;</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> int_type </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMInt64TypeInContext(context);</span>
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMConstInt(int_type, int_literal.parse().unwrap(), </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">)</span>
+<span style="color: #f8f8f2">        },</span>
+
+<span style="color: #f8f8f2">        Expr</span>::<span style="color: #f8f8f2">Add(lhs, rhs) </span><span style="color: #f92672">=&gt;</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> lhs </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">lhs);</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> rhs </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">rhs);</span>
+
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> name </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> CString</span>::<span style="color: #f8f8f2">new(</span><span style="color: #e6db74">&quot;addtmp&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildAdd(builder, lhs, rhs, name.as_ptr())</span>
+<span style="color: #f8f8f2">        },</span>
+
+<span style="color: #f8f8f2">        Expr</span>::<span style="color: #f8f8f2">Sub(lhs, rhs) </span><span style="color: #f92672">=&gt;</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> lhs </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">lhs);</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> rhs </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">rhs);</span>
+
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> name </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> CString</span>::<span style="color: #f8f8f2">new(</span><span style="color: #e6db74">&quot;subtmp&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildSub(builder, lhs, rhs, name.as_ptr())</span>
+<span style="color: #f8f8f2">        },</span>
+
+<span style="color: #f8f8f2">        Expr</span>::<span style="color: #f8f8f2">Mul(lhs, rhs) </span><span style="color: #f92672">=&gt;</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> lhs </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">lhs);</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> rhs </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">rhs);</span>
+
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> name </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> CString</span>::<span style="color: #f8f8f2">new(</span><span style="color: #e6db74">&quot;multmp&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildMul(builder, lhs, rhs, name.as_ptr())</span>
+<span style="color: #f8f8f2">        },</span>
+
+<span style="color: #f8f8f2">        Expr</span>::<span style="color: #f8f8f2">Div(lhs, rhs) </span><span style="color: #f92672">=&gt;</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> lhs </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">lhs);</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> rhs </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">rhs);</span>
+
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> name </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> CString</span>::<span style="color: #f8f8f2">new(</span><span style="color: #e6db74">&quot;divtmp&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildUDiv(builder, lhs, rhs, name.as_ptr())</span>
+<span style="color: #f8f8f2">        },</span>
+<span style="color: #f8f8f2">    }</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<p>Now you can execute programs like <code>10 * 4 + 20 / 2 - 8</code>! Pretty cool, if you ask
+me.</p>
+
+<h1 id="variables">Variables</h1>
+
+<p>We&rsquo;re going to take the easy road and assume that programs don&rsquo;t do any annoying
+stuff like referencing undefined variables. We just store variables in
+registers, and store them in a  <code>HashMap&lt;String, LLVMValueRef&gt;</code>. This works
+because there&rsquo;s only one path through the program.</p>
+
+<p>We extend the language and parser:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #66d9ef">pub</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">enum</span> <span style="color: #a6e22e">Expr</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">    Literal(String),</span>
+<span style="color: #f8f8f2">    Ref(String),</span>
+<span style="color: #f8f8f2">    Assign(String, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Add(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Sub(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Mul(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Div(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">}</span>
+
+<span style="color: #f8f8f2">peg</span><span style="color: #f92672">!</span><span style="color: #f8f8f2"> parser(r</span><span style="color: #960050; background-color: #1e0010">#</span><span style="color: #e6db74">&quot;</span>
+<span style="color: #e6db74">    use super::Expr;</span>
+
+<span style="color: #e6db74">    #[pub]</span>
+<span style="color: #e6db74">    program -&gt; Vec&lt;Expr&gt;</span>
+<span style="color: #e6db74">        = e:(expression ** &quot;</span><span style="color: #960050; background-color: #1e0010">\</span><span style="color: #f8f8f2">n</span><span style="color: #e6db74">&quot;) &quot;</span><span style="color: #960050; background-color: #1e0010">\</span><span style="color: #f8f8f2">n</span><span style="color: #e6db74">&quot; { e }</span>
+
+<span style="color: #e6db74">    expression -&gt; Expr</span>
+<span style="color: #e6db74">        = i:identifier _ &quot;</span><span style="color: #f92672">=</span><span style="color: #e6db74">&quot; _ s:sum { Expr::Assign(i, Box::new(s)) }</span>
+<span style="color: #e6db74">        / sum</span>
+
+<span style="color: #e6db74">    sum -&gt; Expr</span>
+<span style="color: #e6db74">        = a:product _ &quot;</span><span style="color: #f92672">+</span><span style="color: #e6db74">&quot; _ b:sum { Expr::Add(Box::new(a), Box::new(b)) }</span>
+<span style="color: #e6db74">        / a:product _ &quot;</span><span style="color: #f92672">-</span><span style="color: #e6db74">&quot; _ b:sum { Expr::Sub(Box::new(a), Box::new(b)) }</span>
+<span style="color: #e6db74">        / product</span>
+
+<span style="color: #e6db74">    product -&gt; Expr</span>
+<span style="color: #e6db74">        = a:ref_or_literal _ &quot;</span><span style="color: #f92672">*</span><span style="color: #e6db74">&quot; _ b:product { Expr::Mul(Box::new(a), Box::new(b)) }</span>
+<span style="color: #e6db74">        / a:ref_or_literal _ &quot;</span><span style="color: #f92672">/</span><span style="color: #e6db74">&quot; _ b:product { Expr::Div(Box::new(a), Box::new(b)) }</span>
+<span style="color: #e6db74">        / ref_or_literal</span>
+
+<span style="color: #e6db74">    ref_or_literal -&gt; Expr</span>
+<span style="color: #e6db74">        = i:identifier { Expr::Ref(i) }</span>
+<span style="color: #e6db74">        / int_literal</span>
+
+<span style="color: #e6db74">    identifier -&gt; String</span>
+<span style="color: #e6db74">        = [a-zA-Z]+ { match_str.to_owned() }</span>
+
+<span style="color: #e6db74">    int_literal -&gt; Expr</span>
+<span style="color: #e6db74">        = [0-9]+ { Expr::Literal(match_str.to_owned()) }</span>
+
+<span style="color: #e6db74">    _ = &quot;</span><span style="color: #f8f8f2"> </span><span style="color: #e6db74">&quot;*</span>
+<span style="color: #e6db74">&quot;</span><span style="color: #960050; background-color: #1e0010">#</span><span style="color: #f8f8f2">);</span>
+</code></pre></div>
+
+<p>We then add support for the two new expressions:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #66d9ef">unsafe</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">fn</span> <span style="color: #a6e22e">codegen_expr</span><span style="color: #f8f8f2">(context</span>: <span style="color: #a6e22e">LLVMContextRef</span><span style="color: #f8f8f2">, builder</span>: <span style="color: #a6e22e">LLVMBuilderRef</span><span style="color: #f8f8f2">, names</span>: <span style="color: #66d9ef">&amp;</span><span style="color: #a6e22e">mut</span><span style="color: #f8f8f2"> HashMap</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">String, LLVMValueRef</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, expr</span>: <span style="color: #a6e22e">Expr</span><span style="color: #f8f8f2">) </span>-&gt; <span style="color: #a6e22e">LLVMValueRef</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">match</span><span style="color: #f8f8f2"> expr {</span>
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// ...</span>
+
+<span style="color: #f8f8f2">        Expr</span>::<span style="color: #f8f8f2">Ref(name) </span><span style="color: #f92672">=&gt;</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">            </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">names.get(</span><span style="color: #f92672">&amp;</span><span style="color: #f8f8f2">name).unwrap()</span>
+<span style="color: #f8f8f2">        },</span>
+
+<span style="color: #f8f8f2">        Expr</span>::<span style="color: #f8f8f2">Assign(name, expr) </span><span style="color: #f92672">=&gt;</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> new_value </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, names, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">expr);</span>
+<span style="color: #f8f8f2">            names.insert(name, new_value);</span>
+<span style="color: #f8f8f2">            new_value</span>
+<span style="color: #f8f8f2">        },</span>
+<span style="color: #f8f8f2">    }</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<p>And then a quick update in the function <code>codegen</code>:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> int_type </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMInt64TypeInContext(context);</span>
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> zero </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMConstInt(int_type, </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">, </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">);</span>
+
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> names </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> HashMap</span>::<span style="color: #f8f8f2">new();</span>
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> return_value </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> zero; </span><span style="color: #75715e">// return value on empty program</span>
+<span style="color: #66d9ef">for</span><span style="color: #f8f8f2"> expr </span><span style="color: #66d9ef">in</span><span style="color: #f8f8f2"> input {</span>
+<span style="color: #f8f8f2">    return_value </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, </span><span style="color: #f92672">&amp;</span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> names, expr);</span>
+<span style="color: #f8f8f2">}</span>
+<span style="color: #f8f8f2">llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildRet(builder, return_value);</span>
+</code></pre></div>
+
+<p>And voila! Check it out:</p>
+
+<pre><code>vagrant@vagrant:/vagrant$ cat in.ex
+a = 3
+b = 76
+a + b
+vagrant@vagrant:/vagrant$ cargo run
+     Running `target/debug/main`
+vagrant@vagrant:/vagrant$ cat out.ll
+; ModuleID = 'example_module'
+
+define i64 @main() {
+entry:
+  ret i64 79
+}
+</code></pre>
+
+<h1 id="if">If</h1>
+
+<p>Things get a little tricker with <code>if</code>. The easiest way to get <code>if</code> working is to
+store all local variables on the stack, and let LLVM do the optimizing. In LLVM,
+you create a stack variable with the <code>alloca</code> instruction, and then read/write
+it using <code>load</code>/<code>store</code>.</p>
+
+<p>To do this, we again extend the langauge and grammar, by adding a new parser
+rule:</p>
+
+<pre><code>expression -&gt; Expr
+    = if_expression
+    / i:identifier _ &quot;=&quot; _ s:expression { Expr::Assign(i, Box::new(s)) }
+    / sum
+
+if_expression -&gt; Expr
+    = &quot;if&quot; _ e:expression _ &quot;{\n&quot; _ then_body:statements _ &quot;}&quot; _ &quot;else&quot; _ &quot;{\n&quot; _ else_body:statements _ &quot;}&quot; {
+        Expr::If(Box::new(e), then_body, else_body)
+    }
+</code></pre>
+
+<p>And adding a new type of AST node:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #66d9ef">pub</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">enum</span> <span style="color: #a6e22e">Expr</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">    Literal(String),</span>
+<span style="color: #f8f8f2">    Ref(String),</span>
+<span style="color: #f8f8f2">    Assign(String, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Add(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Sub(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Mul(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    Div(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">    If(Box</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Vec</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, Vec</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">Expr</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">),</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<p>Finally, we emit code for an <code>if</code> expression:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #66d9ef">unsafe</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">fn</span> <span style="color: #a6e22e">codegen_expr</span><span style="color: #f8f8f2">(context</span>: <span style="color: #a6e22e">LLVMContextRef</span><span style="color: #f8f8f2">, builder</span>: <span style="color: #a6e22e">LLVMBuilderRef</span><span style="color: #f8f8f2">, func</span>: <span style="color: #a6e22e">LLVMValueRef</span><span style="color: #f8f8f2">, names</span>: <span style="color: #66d9ef">&amp;</span><span style="color: #a6e22e">mut</span><span style="color: #f8f8f2"> HashMap</span><span style="color: #f92672">&lt;</span><span style="color: #f8f8f2">String, LLVMValueRef</span><span style="color: #f92672">&gt;</span><span style="color: #f8f8f2">, expr</span>: <span style="color: #a6e22e">Expr</span><span style="color: #f8f8f2">) </span>-&gt; <span style="color: #a6e22e">LLVMValueRef</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">    </span><span style="color: #66d9ef">match</span><span style="color: #f8f8f2"> expr {</span>
+<span style="color: #f8f8f2">        </span><span style="color: #75715e">// ...</span>
+
+<span style="color: #f8f8f2">        Expr</span>::<span style="color: #f8f8f2">If(condition, then_body, else_body) </span><span style="color: #f92672">=&gt;</span><span style="color: #f8f8f2"> {</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> condition_value </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, func, names, </span><span style="color: #f92672">*</span><span style="color: #f8f8f2">condition);</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> int_type </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMInt64TypeInContext(context);</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> zero </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMConstInt(int_type, </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">, </span><span style="color: #ae81ff">0</span><span style="color: #f8f8f2">);</span>
+
+<span style="color: #f8f8f2">            </span><span style="color: #75715e">// `is_nonzero` is a 1-bit integer</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> name </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> CString</span>::<span style="color: #f8f8f2">new(</span><span style="color: #e6db74">&quot;is_nonzero&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> is_nonzero </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildICmp(builder, llvm</span>::<span style="color: #f8f8f2">LLVMIntPredicate</span>::<span style="color: #f8f8f2">LLVMIntNE, condition_value, zero, name.as_ptr());</span>
+
+<span style="color: #f8f8f2">            </span><span style="color: #75715e">// It&#39;s fine to create blocks first, and then fill them in later.</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> entry_name </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> CString</span>::<span style="color: #f8f8f2">new(</span><span style="color: #e6db74">&quot;entry&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> then_block </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMAppendBasicBlockInContext(context, func, entry_name.as_ptr());</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> else_block </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMAppendBasicBlockInContext(context, func, entry_name.as_ptr());</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> merge_block </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMAppendBasicBlockInContext(context, func, entry_name.as_ptr());</span>
+
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildCondBr(builder, is_nonzero, then_block, else_block);</span>
+
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMPositionBuilderAtEnd(builder, then_block);</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> then_return </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> zero;</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">for</span><span style="color: #f8f8f2"> expr </span><span style="color: #66d9ef">in</span><span style="color: #f8f8f2"> then_body {</span>
+<span style="color: #f8f8f2">                then_return </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, func, names, expr);</span>
+<span style="color: #f8f8f2">            }</span>
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildBr(builder, merge_block);</span>
+
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMPositionBuilderAtEnd(builder, else_block);</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> else_return </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> zero;</span>
+<span style="color: #f8f8f2">            </span><span style="color: #66d9ef">for</span><span style="color: #f8f8f2"> expr </span><span style="color: #66d9ef">in</span><span style="color: #f8f8f2"> else_body {</span>
+<span style="color: #f8f8f2">                else_return </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, func, names, expr);</span>
+<span style="color: #f8f8f2">            }</span>
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildBr(builder, merge_block);</span>
+
+<span style="color: #f8f8f2">            </span><span style="color: #75715e">// Position the builder so that it&#39;s ready to work on the next</span>
+<span style="color: #f8f8f2">            </span><span style="color: #75715e">// expression.</span>
+<span style="color: #f8f8f2">            llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMPositionBuilderAtEnd(builder, merge_block);</span>
+<span style="color: #f8f8f2">            zero</span>
+<span style="color: #f8f8f2">        }</span>
+<span style="color: #f8f8f2">    }</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<p>That&rsquo;s a lot of code, but it does what you&rsquo;d expect. You can now run programs
+like this:</p>
+
+<pre><code>a = 1
+if a {
+    a = 42
+} else {
+    a = 13
+}
+a
+</code></pre>
+
+<p>Which produces the following IR:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-llvm" data-lang="llvm"><span></span><span style="color: #75715e">; ModuleID = &#39;example_module&#39;</span>
+
+<span style="color: #66d9ef">define</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">@main()</span> <span style="color: #f8f8f2">{</span>
+<span style="color: #f8f8f2">entry:</span>
+  <span style="color: #f8f8f2">%a</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">alloca</span> <span style="color: #66d9ef">i64</span>
+  <span style="color: #66d9ef">store</span> <span style="color: #66d9ef">i64</span> <span style="color: #ae81ff">1</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%a</span>
+  <span style="color: #f8f8f2">%a1</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">load</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%a</span>
+  <span style="color: #f8f8f2">%is_nonzero</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">icmp</span> <span style="color: #66d9ef">ne</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">%a1,</span> <span style="color: #ae81ff">0</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">i1</span> <span style="color: #f8f8f2">%is_nonzero,</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry2,</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry3</span>
+
+<span style="color: #f8f8f2">entry2:</span>                                           <span style="color: #75715e">; preds = %entry</span>
+  <span style="color: #66d9ef">store</span> <span style="color: #66d9ef">i64</span> <span style="color: #ae81ff">42</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%a</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry4</span>
+
+<span style="color: #f8f8f2">entry3:</span>                                           <span style="color: #75715e">; preds = %entry</span>
+  <span style="color: #66d9ef">store</span> <span style="color: #66d9ef">i64</span> <span style="color: #ae81ff">13</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%a</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry4</span>
+
+<span style="color: #f8f8f2">entry4:</span>                                           <span style="color: #75715e">; preds = %entry3, %entry2</span>
+  <span style="color: #f8f8f2">%a5</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">load</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%a</span>
+  <span style="color: #66d9ef">ret</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">%a5</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<p>However, we&rsquo;re not quite finished. Currently our if &ldquo;expression&rdquo; always
+evaluates to zero. Instead, <code>if</code> should evaluate to <code>then_return</code> if we execute
+the &ldquo;then&rdquo; path, or <code>else_return</code> otherwise.</p>
+
+<p>How do you get LLVM to track which branch it went through? By using a &ldquo;Phi&rdquo;
+node. You give the <code>phi</code> instruction a list of <code>(block, value)</code> pairs, and that
+phi node will return the value corresponding to the block that was previously
+executed.</p>
+
+<p>Here&rsquo;s how we can finish off <code>if</code>. Note that we have to update <code>then_block</code> and
+<code>else_block</code>. This is because we want the <em>last</em> block in the &ldquo;then&rdquo;/&ldquo;else&rdquo;
+branch, and previously <code>then_block</code> was the <em>first</em> block of the &ldquo;then&rdquo;/&ldquo;else&rdquo;.</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-rust" data-lang="rust"><span></span><span style="color: #75715e">// ...</span>
+
+<span style="color: #75715e">// This is mostly the same code as before, just note the new calls to</span>
+<span style="color: #75715e">// `LLVMGetInsertBlock`.</span>
+
+<span style="color: #f8f8f2">llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMPositionBuilderAtEnd(builder, then_block);</span>
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> then_return </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> zero;</span>
+<span style="color: #66d9ef">for</span><span style="color: #f8f8f2"> expr </span><span style="color: #66d9ef">in</span><span style="color: #f8f8f2"> then_body {</span>
+<span style="color: #f8f8f2">    then_return </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, func, names, expr);</span>
+<span style="color: #f8f8f2">}</span>
+<span style="color: #f8f8f2">llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildBr(builder, merge_block);</span>
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> then_block </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMGetInsertBlock(builder);</span>
+
+<span style="color: #f8f8f2">llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMPositionBuilderAtEnd(builder, else_block);</span>
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> else_return </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> zero;</span>
+<span style="color: #66d9ef">for</span><span style="color: #f8f8f2"> expr </span><span style="color: #66d9ef">in</span><span style="color: #f8f8f2"> else_body {</span>
+<span style="color: #f8f8f2">    else_return </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> codegen_expr(context, builder, func, names, expr);</span>
+<span style="color: #f8f8f2">}</span>
+<span style="color: #f8f8f2">llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildBr(builder, merge_block);</span>
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> else_block </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMGetInsertBlock(builder);</span>
+
+<span style="color: #75715e">// Insert the phi node</span>
+<span style="color: #f8f8f2">llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMPositionBuilderAtEnd(builder, merge_block);</span>
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> phi_name </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> CString</span>::<span style="color: #f8f8f2">new(</span><span style="color: #e6db74">&quot;iftmp&quot;</span><span style="color: #f8f8f2">).unwrap();</span>
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> phi </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMBuildPhi(builder, int_type, phi_name.as_ptr());</span>
+
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> values </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> vec</span><span style="color: #f92672">!</span><span style="color: #f8f8f2">[then_return, else_return];</span>
+<span style="color: #66d9ef">let</span><span style="color: #f8f8f2"> </span><span style="color: #66d9ef">mut</span><span style="color: #f8f8f2"> blocks </span><span style="color: #f92672">=</span><span style="color: #f8f8f2"> vec</span><span style="color: #f92672">!</span><span style="color: #f8f8f2">[then_block, else_block];</span>
+
+<span style="color: #f8f8f2">llvm</span>::<span style="color: #f8f8f2">core</span>::<span style="color: #f8f8f2">LLVMAddIncoming(phi, values.as_mut_ptr(), blocks.as_mut_ptr(), </span><span style="color: #ae81ff">2</span><span style="color: #f8f8f2">);</span>
+<span style="color: #f8f8f2">phi</span>
+</code></pre></div>
+
+<p>And there you go, an amazing compiler:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-text" data-lang="text"><span></span>vagrant@vagrant:/vagrant$ cat in.ex
+a = 1
+b = 0
+c = if a {
+    if b {
+        11
+    } else {
+        40
+    }
+} else {
+    if b {
+        10
+    } else {
+        20
+    }
+}
+c + 2
+vagrant@vagrant:/vagrant$ cargo run
+     Running `target/debug/main`
+vagrant@vagrant:/vagrant$ lli-3.8 out.ll ; echo $?
+42
+</code></pre></div>
+
+<p>So cool! Here&rsquo;s the code we emit for that example input program:</p>
+<div class="highlight" style="background: #272822"><pre style="line-height: 125%"><code class="language-llvm" data-lang="llvm"><span></span><span style="color: #75715e">; ModuleID = &#39;example_module&#39;</span>
+
+<span style="color: #66d9ef">define</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">@main()</span> <span style="color: #f8f8f2">{</span>
+<span style="color: #f8f8f2">entry:</span>
+  <span style="color: #f8f8f2">%a</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">alloca</span> <span style="color: #66d9ef">i64</span>
+  <span style="color: #f8f8f2">%b</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">alloca</span> <span style="color: #66d9ef">i64</span>
+  <span style="color: #f8f8f2">%c</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">alloca</span> <span style="color: #66d9ef">i64</span>
+  <span style="color: #66d9ef">store</span> <span style="color: #66d9ef">i64</span> <span style="color: #ae81ff">1</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%a</span>
+  <span style="color: #66d9ef">store</span> <span style="color: #66d9ef">i64</span> <span style="color: #ae81ff">0</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%b</span>
+  <span style="color: #f8f8f2">%a1</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">load</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%a</span>
+  <span style="color: #f8f8f2">%is_nonzero</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">icmp</span> <span style="color: #66d9ef">ne</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">%a1,</span> <span style="color: #ae81ff">0</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">i1</span> <span style="color: #f8f8f2">%is_nonzero,</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry2,</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry3</span>
+
+<span style="color: #f8f8f2">entry2:</span>                                           <span style="color: #75715e">; preds = %entry</span>
+  <span style="color: #f8f8f2">%b5</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">load</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%b</span>
+  <span style="color: #f8f8f2">%is_nonzero6</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">icmp</span> <span style="color: #66d9ef">ne</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">%b5,</span> <span style="color: #ae81ff">0</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">i1</span> <span style="color: #f8f8f2">%is_nonzero6,</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry7,</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry8</span>
+
+<span style="color: #f8f8f2">entry3:</span>                                           <span style="color: #75715e">; preds = %entry</span>
+  <span style="color: #f8f8f2">%b10</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">load</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%b</span>
+  <span style="color: #f8f8f2">%is_nonzero11</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">icmp</span> <span style="color: #66d9ef">ne</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">%b10,</span> <span style="color: #ae81ff">0</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">i1</span> <span style="color: #f8f8f2">%is_nonzero11,</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry12,</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry13</span>
+
+<span style="color: #f8f8f2">entry4:</span>                                           <span style="color: #75715e">; preds = %entry14, %entry9</span>
+  <span style="color: #f8f8f2">%iftmp16</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">phi</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">[</span> <span style="color: #f8f8f2">%iftmp,</span> <span style="color: #f8f8f2">%entry9</span> <span style="color: #f8f8f2">],</span> <span style="color: #f8f8f2">[</span> <span style="color: #f8f8f2">%iftmp15,</span> <span style="color: #f8f8f2">%entry14</span> <span style="color: #f8f8f2">]</span>
+  <span style="color: #66d9ef">store</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">%iftmp16,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%c</span>
+  <span style="color: #f8f8f2">%c17</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">load</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">,</span> <span style="color: #66d9ef">i64</span><span style="color: #f8f8f2">*</span> <span style="color: #f8f8f2">%c</span>
+  <span style="color: #f8f8f2">%addtmp</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">add</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">%c17,</span> <span style="color: #ae81ff">2</span>
+  <span style="color: #66d9ef">ret</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">%addtmp</span>
+
+<span style="color: #f8f8f2">entry7:</span>                                           <span style="color: #75715e">; preds = %entry2</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry9</span>
+
+<span style="color: #f8f8f2">entry8:</span>                                           <span style="color: #75715e">; preds = %entry2</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry9</span>
+
+<span style="color: #f8f8f2">entry9:</span>                                           <span style="color: #75715e">; preds = %entry8, %entry7</span>
+  <span style="color: #f8f8f2">%iftmp</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">phi</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">[</span> <span style="color: #ae81ff">11</span><span style="color: #f8f8f2">,</span> <span style="color: #f8f8f2">%entry7</span> <span style="color: #f8f8f2">],</span> <span style="color: #f8f8f2">[</span> <span style="color: #ae81ff">40</span><span style="color: #f8f8f2">,</span> <span style="color: #f8f8f2">%entry8</span> <span style="color: #f8f8f2">]</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry4</span>
+
+<span style="color: #f8f8f2">entry12:</span>                                          <span style="color: #75715e">; preds = %entry3</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry14</span>
+
+<span style="color: #f8f8f2">entry13:</span>                                          <span style="color: #75715e">; preds = %entry3</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry14</span>
+
+<span style="color: #f8f8f2">entry14:</span>                                          <span style="color: #75715e">; preds = %entry13, %entry12</span>
+  <span style="color: #f8f8f2">%iftmp15</span> <span style="color: #f8f8f2">=</span> <span style="color: #66d9ef">phi</span> <span style="color: #66d9ef">i64</span> <span style="color: #f8f8f2">[</span> <span style="color: #ae81ff">10</span><span style="color: #f8f8f2">,</span> <span style="color: #f8f8f2">%entry12</span> <span style="color: #f8f8f2">],</span> <span style="color: #f8f8f2">[</span> <span style="color: #ae81ff">20</span><span style="color: #f8f8f2">,</span> <span style="color: #f8f8f2">%entry13</span> <span style="color: #f8f8f2">]</span>
+  <span style="color: #66d9ef">br</span> <span style="color: #66d9ef">label</span> <span style="color: #f8f8f2">%entry4</span>
+<span style="color: #f8f8f2">}</span>
+</code></pre></div>
+
+<p>Note the pattern the blocks have: excluding the first entry, they&rsquo;re in groups
+of three, with the first being a &ldquo;then&rdquo; branch, then an &ldquo;else&rdquo; branch, and then
+the &ldquo;merge&rdquo; block (with its recognizable <code>phi</code> instruction). That&rsquo;s a relic of
+the fact that each time we encounter an &ldquo;if&rdquo; expression, we append three new
+blocks to main. The block triplets are ordered as they were recursively explored
+in the AST.</p>
+
+<p>That&rsquo;s all I got! Hopefully at this point you have enough of a base to lead your
+own destiny.</p>
+
+<p><em>Shout-out to Sunjay Varma for pointing out a broken link in this post.</em></p>
+
+    </div>
+ 
+    <ul class="article-taxonomy">
+      
+    
+      
+  </article>
+
+</main>
+
+      <footer class="footer">
+        <ul class="footer-links">
+          <li>
+            <a href="http://blog.ulysse.io/index.xml" type="application/rss+xml" target="_blank"><i class="fa fa-rss"></i> RSS feed</a>
+          </li>
+          <li>
+            <a href="https://github.com/mobybit/hugo-natrium-theme"><i class="fa fa-github"></i> Code</a>
+          </li>
+          <li>
+            <a href="http://blog.ulysse.io/site-notice">Site notice</a>
+          </li>
+        </ul>
+      </footer>
+
+    </div>
+
+  </body>
+</html>
+
