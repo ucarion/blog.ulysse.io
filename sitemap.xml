@@ -3,39 +3,39 @@
   xmlns:xhtml="http://www.w3.org/1999/xhtml">
   
   <url>
-    <loc>http://blog.ulysse.io/post/setting-up-ecs-with-terraform/</loc>
+    <loc>https://blog.ulysse.io/post/setting-up-ecs-with-terraform/</loc>
     <lastmod>2018-06-27T12:10:59-07:00</lastmod>
   </url>
   
   <url>
-    <loc>http://blog.ulysse.io/post/minecraft-server-with-backups-via-systemd/</loc>
+    <loc>https://blog.ulysse.io/post/minecraft-server-with-backups-via-systemd/</loc>
     <lastmod>2016-08-31T00:00:00+00:00</lastmod>
   </url>
   
   <url>
-    <loc>http://blog.ulysse.io/post/a-toy-front-end-for-llvm-written-in-rust/</loc>
+    <loc>https://blog.ulysse.io/post/a-toy-front-end-for-llvm-written-in-rust/</loc>
     <lastmod>2016-07-03T00:00:00+00:00</lastmod>
   </url>
   
   <url>
-    <loc>http://blog.ulysse.io/categories/</loc>
+    <loc>https://blog.ulysse.io/categories/</loc>
     <priority>0</priority>
   </url>
   
   <url>
-    <loc>http://blog.ulysse.io/</loc>
+    <loc>https://blog.ulysse.io/</loc>
     <lastmod>2018-06-27T12:10:59-07:00</lastmod>
     <priority>0</priority>
   </url>
   
   <url>
-    <loc>http://blog.ulysse.io/post/</loc>
+    <loc>https://blog.ulysse.io/post/</loc>
     <lastmod>2018-06-27T12:10:59-07:00</lastmod>
     <priority>0</priority>
   </url>
   
   <url>
-    <loc>http://blog.ulysse.io/tags/</loc>
+    <loc>https://blog.ulysse.io/tags/</loc>
     <priority>0</priority>
   </url>
   

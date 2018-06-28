@@ -2,22 +2,22 @@
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>Odyssey: Ulysse&#39;s Blog</title>
-    <link>http://blog.ulysse.io/</link>
+    <link>https://blog.ulysse.io/</link>
     <description>Recent content on Odyssey: Ulysse&#39;s Blog</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>en-us</language>
     <lastBuildDate>Wed, 27 Jun 2018 12:10:59 -0700</lastBuildDate>
     
-        <atom:link href="http://blog.ulysse.io/index.xml" rel="self" type="application/rss+xml" />
+        <atom:link href="https://blog.ulysse.io/index.xml" rel="self" type="application/rss+xml" />
     
     
     
     <item>
       <title>Setting up ECS with Terraform</title>
-      <link>http://blog.ulysse.io/post/setting-up-ecs-with-terraform/</link>
+      <link>https://blog.ulysse.io/post/setting-up-ecs-with-terraform/</link>
       <pubDate>Wed, 27 Jun 2018 12:10:59 -0700</pubDate>
       
-      <guid>http://blog.ulysse.io/post/setting-up-ecs-with-terraform/</guid>
+      <guid>https://blog.ulysse.io/post/setting-up-ecs-with-terraform/</guid>
       <description>This document describes, for the AWS ECS noob, how to set up an AWS ECS cluster from scratch, entirely using Terraform.
 If you&amp;rsquo;re in a hurry, skip to the end to just get a module you can copy-and-paste.
 Terraform is a tool that lets you declaratively describe the state of your infrastructure. Probably the best feature about it is that your infra&amp;rsquo;s state is in version control, instead of ad-hoc scripts and here-be-dragons resources that somebody made by clicking around in the AWS UI.</description>
@@ -27,10 +27,10 @@ Terraform is a tool that lets you declaratively describe the state of your infra
     
     <item>
       <title>Minecraft Server with Backups via systemd</title>
-      <link>http://blog.ulysse.io/post/minecraft-server-with-backups-via-systemd/</link>
+      <link>https://blog.ulysse.io/post/minecraft-server-with-backups-via-systemd/</link>
       <pubDate>Wed, 31 Aug 2016 00:00:00 +0000</pubDate>
       
-      <guid>http://blog.ulysse.io/post/minecraft-server-with-backups-via-systemd/</guid>
+      <guid>https://blog.ulysse.io/post/minecraft-server-with-backups-via-systemd/</guid>
       <description>In this post, I&amp;rsquo;ll describe how to use systemd to manage a Minecraft server. A named pipe will allow us to send commands to that server, which we&amp;rsquo;ll use in order to set up a job that periodically makes backups and uploads them to Google drive. This may sound fancy, but luckily systemd makes this a breeze to set up, once you&amp;rsquo;ve done a little Googling.
 This tutorial does not assume you&amp;rsquo;ve ever set up a Minecraft server before.</description>
     </item>
@@ -39,10 +39,10 @@ This tutorial does not assume you&amp;rsquo;ve ever set up a Minecraft server be
     
     <item>
       <title>A Toy Front-End for LLVM, written in Rust</title>
-      <link>http://blog.ulysse.io/post/a-toy-front-end-for-llvm-written-in-rust/</link>
+      <link>https://blog.ulysse.io/post/a-toy-front-end-for-llvm-written-in-rust/</link>
       <pubDate>Sun, 03 Jul 2016 00:00:00 +0000</pubDate>
       
-      <guid>http://blog.ulysse.io/post/a-toy-front-end-for-llvm-written-in-rust/</guid>
+      <guid>https://blog.ulysse.io/post/a-toy-front-end-for-llvm-written-in-rust/</guid>
       <description>My current side project is a compiler written in Rust that emits LLVM IR. LLVM&amp;rsquo;s API is a bit daunting for noobs, and there aren&amp;rsquo;t many tutorials out there (and they&amp;rsquo;re all in C++, so it&amp;rsquo;s not always obvious how to do the same in Rust). I wish someone had held my hand as I got started with this, so here&amp;rsquo;s what I would have shown myself.
 For Rust, your best option for interfacing with LLVM is through the llvm-sys crate.</description>
     </item>
